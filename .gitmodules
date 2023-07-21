@@ -1,0 +1,3 @@
+[submodule "realpython_materials"]
+	path = realpython_materials
+	url = https://github.com/realpython/materials
