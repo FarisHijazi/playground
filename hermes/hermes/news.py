@@ -13,11 +13,17 @@ FEEDS: list[str] = [
     "https://www.federalreserve.gov/feeds/press_all.xml",
 ]
 
-# keyword tuple -> list of market slugs the headline likely affects
+# keyword tuple -> list of market slugs the headline likely affects.
+# Slugs must be real Polymarket markets you list in HERMES_MARKETS for the
+# alert to actually drive a paper trade. Override via HERMES_NEWS_TAGS json.
 TAGS: dict[tuple[str, ...], list[str]] = {
-    ("iran", "tehran"): ["iran-strike-2026", "iran-nuclear-deal"],
-    ("fed", "powell", "fomc"): ["fed-rate-cut-may", "fed-hike-2026"],
-    ("ceasefire",): ["peace-agreement-0422"],
+    ("iran", "tehran", "ceasefire"): ["us-x-iran-ceasefire-extended-by-april-22-2026"],
+    ("fed", "powell", "fomc", "interest rate", "rate cut", "rate hike"): [
+        "will-the-fed-decrease-interest-rates-by-25-bps-after-the-april-2026-meeting",
+        "will-the-fed-decrease-interest-rates-by-50-bps-after-the-april-2026-meeting",
+        "will-there-be-no-change-in-fed-interest-rates-after-the-april-2026-meeting",
+    ],
+    ("bitcoin", "btc", "crypto"): ["will-bitcoin-hit-150k-by-june-30-2026"],
 }
 
 

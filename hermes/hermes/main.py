@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 from hermes.alerts import fire_alert
 from hermes.news import poll_news
+from hermes.paper import make_book
 from hermes.snapshot import diff, fetch_snapshot
 from hermes.whales import detect_whale_moves
 
@@ -28,12 +29,19 @@ DEFAULT_MARKETS = [
 
 TICK = int(os.environ.get("HERMES_TICK_SEC", "180"))
 NEWS_TICK = int(os.environ.get("HERMES_NEWS_TICK_SEC", "60"))
+PAPER_HOLD_SEC = int(os.environ.get("HERMES_PAPER_HOLD_SEC", "900"))
+PAPER_TRADE_SIZE = float(os.environ.get("HERMES_PAPER_TRADE_SIZE", "1.0"))
+
+BOOK = make_book()
+LATEST_PRICES: dict[str, float] = {}
+NEWS_DIRECTION: dict[str, str] = {}  # market_slug -> "YES"/"NO" hint from last headline
 
 
 async def monitor(slug: str, state: dict, client: httpx.AsyncClient) -> None:
     while True:
         try:
             curr = await fetch_snapshot(client, slug)
+            LATEST_PRICES[slug] = curr.yes_price
             log.info(
                 "[%s] yes=%.3f spread=%.3f bid=%.0f ask=%.0f vol24h=%.0f",
                 slug,
@@ -47,15 +55,34 @@ async def monitor(slug: str, state: dict, client: httpx.AsyncClient) -> None:
             if prev:
                 d = diff(prev, curr)
                 if abs(d["imbalance"]) > 0.6:
+                    direction = "YES" if d["imbalance"] > 0 else "NO"
                     await fire_alert(
                         "alignment",
                         {
                             "slug": slug,
                             "layers": ["orderbook"],
-                            "direction": "YES" if d["imbalance"] > 0 else "NO",
+                            "direction": direction,
                             "edge": d["imbalance"],
                         },
                     )
+                    if BOOK is not None:
+                        BOOK.open(
+                            market=slug, side=direction,
+                            size_usd=PAPER_TRADE_SIZE,
+                            yes_price=curr.yes_price,
+                            hold_sec=PAPER_HOLD_SEC,
+                            reason=f"imbalance={d['imbalance']:.2f}",
+                        )
+
+            # news-lag: if a headline tagged this market recently, take YES
+            if BOOK is not None and slug in NEWS_DIRECTION:
+                BOOK.open(
+                    market=slug, side=NEWS_DIRECTION.pop(slug),
+                    size_usd=PAPER_TRADE_SIZE,
+                    yes_price=curr.yes_price,
+                    hold_sec=PAPER_HOLD_SEC,
+                    reason="news_lag",
+                )
 
             whale_sig = await detect_whale_moves(
                 client,
@@ -64,6 +91,23 @@ async def monitor(slug: str, state: dict, client: httpx.AsyncClient) -> None:
             )
             for s in whale_sig:
                 await fire_alert("whale_move", s)
+                if BOOK is not None:
+                    BOOK.open(
+                        market=slug,
+                        side="YES" if s["action"] == "ADD" else "NO",
+                        size_usd=PAPER_TRADE_SIZE,
+                        yes_price=curr.yes_price,
+                        hold_sec=PAPER_HOLD_SEC,
+                        reason=f"whale_{s['tag']}",
+                    )
+
+            if BOOK is not None:
+                BOOK.expire(LATEST_PRICES)
+                eq = BOOK.equity(LATEST_PRICES)
+                log.info(
+                    "[paper] equity=$%.3f cash=$%.3f open=%d closed=%d",
+                    eq, BOOK.cash, len(BOOK.positions), len(BOOK.closed),
+                )
 
             state["last"] = curr
         except Exception as e:  # keep the loop alive
@@ -83,6 +127,8 @@ async def news_loop(client: httpx.AsyncClient) -> None:
                         "news_lag",
                         {"market": m, "title": h["title"], "link": h["link"]},
                     )
+                    # default direction guess: positive headline -> YES
+                    NEWS_DIRECTION[m] = "YES"
         except Exception as e:
             log.exception("news loop error: %s", e)
         await asyncio.sleep(NEWS_TICK)
