@@ -66,13 +66,24 @@ async def fetch_snapshot(client: httpx.AsyncClient, slug: str) -> MarketSnapshot
 
 
 def diff(prev: MarketSnapshot, curr: MarketSnapshot) -> dict:
-    bid_ask_total = max(curr.bid_size + curr.ask_size, 1.0)
+    # Require both sides of the book to have meaningful size before we
+    # treat (bid - ask) as an imbalance. A book with one side empty looks
+    # like a +/-1.0 imbalance every tick but conveys no directional pressure.
+    MIN_SIDE_SIZE = 100.0
+    has_two_sided_book = (
+        curr.bid_size >= MIN_SIDE_SIZE and curr.ask_size >= MIN_SIDE_SIZE
+    )
+    if has_two_sided_book:
+        imbalance = (curr.bid_size - curr.ask_size) / (curr.bid_size + curr.ask_size)
+    else:
+        imbalance = 0.0
     return {
         "dt_sec": curr.ts - prev.ts,
         "price_delta": curr.yes_price - prev.yes_price,
         "price_pct": (curr.yes_price - prev.yes_price) / max(prev.yes_price, 1e-6),
         "bid_delta": curr.bid_size - prev.bid_size,
         "ask_delta": curr.ask_size - prev.ask_size,
-        "imbalance": (curr.bid_size - curr.ask_size) / bid_ask_total,
+        "imbalance": imbalance,
+        "two_sided_book": has_two_sided_book,
         "vol_delta": curr.volume_24h - prev.volume_24h,
     }
